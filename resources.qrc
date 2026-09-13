@@ -1,0 +1,5 @@
+<RCC>
+    <qresource prefix="/images">
+        <file>uav_schema.png</file>
+    </qresource>
+</RCC>
