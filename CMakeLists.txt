@@ -32,11 +32,36 @@ find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS Widgets PrintSupport)
 find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Widgets PrintSupport)
 
 # Telemetri artik 915 MHz seri radyo yerine ZeroMQ (loopback) uzerinden geliyor
-# -- bkz. zmqsubscriber.h/zmqcommandpublisher.h. vcpkg ile kurulum:
-#   vcpkg install zeromq cppzmq --triplet x64-mingw-dynamic
-# ve CMake'e -DCMAKE_TOOLCHAIN_FILE=<vcpkg-kok>/scripts/buildsystems/vcpkg.cmake verilmeli.
-find_package(ZeroMQ CONFIG REQUIRED)
-find_package(cppzmq CONFIG REQUIRED)
+# -- bkz. zmqsubscriber.h/zmqcommandpublisher.h.
+#
+# Windows: vcpkg ZeroMQ/cppzmq'yu CMake CONFIG dosyalariyla (ZeroMQConfig.cmake)
+# saglar -- vcpkg install zeromq cppzmq --triplet x64-mingw-dynamic
+#
+# Linux: apt'in libzmq3-dev'i CONFIG dosyasi degil pkg-config (.pc) sagliyor,
+# find_package(... CONFIG REQUIRED) bu yuzden orada calismaz -- pkg-config
+# uzerinden buluyoruz. cppzmq (zmq.hpp) header-only; sistemde varsa
+# (libcppzmq-dev) find_path onu bulur.
+if(WIN32)
+    find_package(ZeroMQ CONFIG REQUIRED)
+    find_package(cppzmq CONFIG REQUIRED)
+else()
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(PC_ZMQ REQUIRED libzmq)
+
+    add_library(libzmq INTERFACE IMPORTED)
+    target_include_directories(libzmq INTERFACE ${PC_ZMQ_INCLUDE_DIRS})
+    target_link_directories(libzmq INTERFACE ${PC_ZMQ_LIBRARY_DIRS})
+    target_link_libraries(libzmq INTERFACE ${PC_ZMQ_LIBRARIES})
+
+    find_path(CPPZMQ_INCLUDE_DIR zmq.hpp)
+    if(NOT CPPZMQ_INCLUDE_DIR)
+        message(FATAL_ERROR "cppzmq (zmq.hpp) bulunamadi -- 'sudo apt install "
+            "libcppzmq-dev' dene; yoksa https://github.com/zeromq/cppzmq'dan "
+            "zmq.hpp/zmq_addon.hpp dosyalarini indirip /usr/local/include'a koy.")
+    endif()
+    add_library(cppzmq INTERFACE IMPORTED)
+    target_include_directories(cppzmq INTERFACE ${CPPZMQ_INCLUDE_DIR})
+endif()
 
 set(PROJECT_SOURCES
     main.cpp
