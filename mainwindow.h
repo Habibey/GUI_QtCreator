@@ -256,7 +256,13 @@ private:
     QLabel *konumEnlemLabel;
     QLabel *konumBoylamLabel;
 
-    // --- Tema (ED=açık mavi/lacivert, ET=koyu/turkuaz) ---
+    // --- Tema: iki BAĞIMSIZ eksen -- ED/ET (aksan rengi: turkuaz/kırmızı,
+    // modeSwitch ile değişir) ve açık/koyu (karanlikMod, header'daki ayrı
+    // düğmeyle değişir). Şelale/spektrum/minimap grafikleri BİLEREK
+    // karanlikMod'dan etkilenmez -- gerçek spektrum analizör yazılımlarında
+    // (gqrx, SDR++) olduğu gibi RF görselleştirmesi her zaman koyu zeminde
+    // gösterilir, uygulamanın geri kalanı açık temaya geçse bile.
+    bool karanlikMod = true;
     QWidget *central;
     QWidget *headerBar;
     QLabel *teamLabel;

@@ -2,6 +2,7 @@
 #include <QGridLayout>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
+#include <QSplitter>
 #include <QDebug>
 #include <QDateTime>
 #include <QTime>
@@ -37,10 +38,11 @@ MainWindow::MainWindow(QWidget *parent)
     outerLayout->addWidget(buildHeaderBar());
     connect(modeSwitch, &QAbstractButton::toggled, this, &MainWindow::modAktifDegisti);
 
-    QWidget *bodyWidget = new QWidget();
-    QGridLayout *mainGrid = new QGridLayout(bodyWidget);
-    mainGrid->setSpacing(10);
-    mainGrid->setContentsMargins(10, 10, 10, 10);
+    // --- Üst satır: sol/sağ paneller + orta (İHA) panel ---
+    QWidget *ustSatir = new QWidget();
+    QGridLayout *ustGrid = new QGridLayout(ustSatir);
+    ustGrid->setSpacing(10);
+    ustGrid->setContentsMargins(0, 0, 0, 0);
 
     // --- Sol/sağ paneller: ED (index 0) ve ET (index 1) arasında ModeSwitch
     // ile geçilir. Orta panel (İHA) her iki modda da aynı kalır.
@@ -52,16 +54,11 @@ MainWindow::MainWindow(QWidget *parent)
     sagPanelStack->addWidget(buildSignalPanel());   // 0: ED
     sagPanelStack->addWidget(buildETGucPanel());    // 1: ET
 
-    mainGrid->addWidget(solPanelStack,        0, 0, 1, 1);
-    mainGrid->addWidget(buildCenterPanel(),   0, 1, 1, 2);
-    mainGrid->addWidget(sagPanelStack,        0, 3, 1, 1);
+    ustGrid->addWidget(solPanelStack,        0, 0, 1, 1);
+    ustGrid->addWidget(buildCenterPanel(),   0, 1, 1, 2);
+    ustGrid->addWidget(sagPanelStack,        0, 3, 1, 1);
 
-    // --- Alt satır: şelale (sol) + anlık spektrum çizgisi (sağ), ED/ET ortak ---
-    QWidget *altSatir = new QWidget();
-    QHBoxLayout *altLayout = new QHBoxLayout(altSatir);
-    altLayout->setContentsMargins(0, 0, 0, 0);
-    altLayout->setSpacing(10);
-
+    // --- Şelale (sol) + anlık spektrum çizgisi (sağ), ED/ET ortak ---
     waterfallPlot = buildWaterfallPlot();
     spektrumPlot = buildSpectrumPlot();
 
@@ -72,13 +69,28 @@ MainWindow::MainWindow(QWidget *parent)
     waterfallSutunLayout->addWidget(buildWaterfallKontrastCubugu());
     waterfallSutunLayout->addWidget(waterfallPlot, 1);
 
-    altLayout->addWidget(waterfallSutunu, 3);
-    altLayout->addWidget(spektrumPlot, 2);
+    // Şelale/spektrum ve üst/alt satır arasındaki bölücüler artık SÜRÜKLENEBİLİR
+    // (QSplitter) -- operatör istediği grafiği (waterfall, spektrum çizgisi ya
+    // da üst panelleri) büyütüp küçültebilsin diye. setChildrenCollapsible(false)
+    // ile sürüklerken bir taraf yanlışlıkla tamamen kaybolmuyor.
+    QSplitter *altBolucu = new QSplitter(Qt::Horizontal);
+    altBolucu->addWidget(waterfallSutunu);
+    altBolucu->addWidget(spektrumPlot);
+    altBolucu->setStretchFactor(0, 3);
+    altBolucu->setStretchFactor(1, 2);
+    altBolucu->setChildrenCollapsible(false);
 
-    mainGrid->addWidget(altSatir, 1, 0, 1, 4);
+    QSplitter *anaBolucu = new QSplitter(Qt::Vertical);
+    anaBolucu->addWidget(ustSatir);
+    anaBolucu->addWidget(altBolucu);
+    anaBolucu->setStretchFactor(0, 2);
+    anaBolucu->setStretchFactor(1, 1);
+    anaBolucu->setChildrenCollapsible(false);
 
-    mainGrid->setRowStretch(0, 2);
-    mainGrid->setRowStretch(1, 1);
+    QWidget *bodyWidget = new QWidget();
+    QVBoxLayout *bodyLayout = new QVBoxLayout(bodyWidget);
+    bodyLayout->setContentsMargins(10, 10, 10, 10);
+    bodyLayout->addWidget(anaBolucu);
 
     outerLayout->addWidget(bodyWidget);
 
@@ -125,12 +137,29 @@ QWidget* MainWindow::buildHeaderBar()
     connectionStatusLabel = new QLabel("● BAĞLI DEĞİL");
     connectionStatusLabel->setStyleSheet("color: #ff4444; font-weight: bold; font-size: 13px;");
 
+    // Açık/koyu tema düğmesi -- ED/ET aksan rengiyle BAĞIMSIZ, sadece
+    // arkaplan/metin karşıtlığını değiştirir (bkz. temaUygula/karanlikMod).
+    QPushButton *temaSwitchButonu = new QPushButton("🌙 KOYU");
+    temaSwitchButonu->setCheckable(true);
+    temaSwitchButonu->setChecked(true); // başlangıç: koyu tema
+    temaSwitchButonu->setFixedHeight(26);
+    temaSwitchButonu->setToolTip("Açık/Koyu tema değiştir");
+    connect(temaSwitchButonu, &QPushButton::toggled, this, [this](bool koyu) {
+        karanlikMod = koyu;
+        temaUygula(modeSwitch->isChecked());
+    });
+    connect(temaSwitchButonu, &QPushButton::toggled, temaSwitchButonu, [temaSwitchButonu](bool koyu) {
+        temaSwitchButonu->setText(koyu ? "🌙 KOYU" : "☀ AÇIK");
+    });
+
     layout->addWidget(teamLabel);
     layout->addStretch();
     layout->addWidget(modeSwitch);
     layout->addStretch();
     layout->addWidget(clockLabel);
     layout->addStretch();
+    layout->addWidget(temaSwitchButonu);
+    layout->addSpacing(10);
     layout->addWidget(connectionStatusLabel);
 
     return headerBar;
@@ -311,17 +340,41 @@ void MainWindow::aldatmaBaslatDurdur(bool aktif)
 // ================= GNSS ALDATMA (madde 5.2.4) =================
 void MainWindow::gnssAldatmaBaslatDurdur(bool aktif)
 {
+    // et_control.py'deki GNSS_FREKANSLARI ile BİREBİR aynı (MHz) -- gerçek
+    // spoofing DEĞİL, seçilen servisin taşıyıcı frekansında barrage-noise
+    // karıştırma (bkz. et_control.py PlutoTX.start_gnss). Servis adı formatı
+    // ("<BAŞLIK> <servis>", ör. "GPS L1") buildServisSatiri'deki "servisAdi"
+    // property'siyle AYNI olmalı.
+    static const QMap<QString, double> gnssFrekanslariMhz = {
+        {"GPS L1", 1575.42}, {"GPS L2", 1227.60}, {"GPS L5", 1176.45},
+        {"GLONASS L1", 1602.00}, {"GLONASS L2", 1246.00}, {"GLONASS L3", 1202.025},
+        {"GALILEO E1", 1575.42}, {"GALILEO E5a", 1176.45}, {"GALILEO E5b", 1207.14}, {"GALILEO E6", 1278.75},
+        {"BEIDOU B1", 1561.098}, {"BEIDOU B2", 1207.14}, {"BEIDOU B3", 1268.52},
+    };
+
     gnssBaslatButonu->setText(aktif ? "GNSS ALDATMAYI DURDUR" : "GNSS ALDATMAYI BAŞLAT");
     if (aktif) {
         QStringList secili;
+        QStringList freqStrs;
         for (QPushButton *btn : gnssServisButonlari) {
-            if (btn->isChecked()) {
-                secili << btn->property("servisAdi").toString();
-            }
+            if (!btn->isChecked()) continue;
+            const QString servisAdi = btn->property("servisAdi").toString();
+            secili << servisAdi;
+            freqStrs << QString::number(gnssFrekanslariMhz.value(servisAdi), 'f', 6);
         }
-        addLogEntry(secili.isEmpty() ? "GNSS aldatma başlatıldı (servis seçilmedi)"
+        // Hiç servis seçilmediyse et_control.py zaten GPS L1'e düşüyor
+        // (GNSS_VARSAYILAN_SERVIS) -- burada da aynı varsayılanı gönderelim
+        // ki backend "en az bir frekans gerekli" diyip hiçbir şey yapmasın.
+        if (freqStrs.isEmpty()) {
+            freqStrs << QString::number(gnssFrekanslariMhz.value("GPS L1"), 'f', 6);
+        }
+        if (mZmqPublisher)
+            mZmqPublisher->sendLine(QString("ET,BASLAT,GNSS_ALDATMA,%1,TEKLI").arg(freqStrs.join(";")));
+        addLogEntry(secili.isEmpty() ? "GNSS aldatma başlatıldı (servis seçilmedi, varsayılan GPS L1)"
                                       : QString("GNSS aldatma başlatıldı: %1").arg(secili.join(", ")));
     } else {
+        if (mZmqPublisher)
+            mZmqPublisher->sendLine("ET,DURDUR,GNSS_ALDATMA");
         addLogEntry("GNSS aldatma durduruldu");
     }
 }
@@ -332,18 +385,22 @@ void MainWindow::gnssAldatmaBaslatDurdur(bool aktif)
 // arasında paylaşılan widget'lar olsalar da) moda göre yeniden boyanır.
 void MainWindow::temaUygula(bool etModu)
 {
-    // Işık temalarıyla uğraşmak yerine köke dönüldü: ikisi de aynı orijinal
-    // koyu tema (#0b0f19, dokunulmamış hali) -- tek fark aksan rengi.
-    // ED = orijinal turkuaz (#00ffcc, hiç değiştirmediğimiz ilk hali),
-    // ET = aynı temanın kırmızı varyantı.
-    const QString anaArkaplan  = "#0b0f19";
-    const QString anaMetin     = etModu ? "#ff4444" : "#00ffcc";
-    const QString baslikRengi  = etModu ? "#e08a8a" : "#6fe0d0";
-    const QString cerceveRengi = "#1e3a4a";
-    const QString panelBg      = "rgba(10,14,25,255)";
-    const QString infoBoxBg    = "rgba(15,20,35,220)";
-    const QString headerBg     = "#12182a";
-    const QColor  glowRengi    = etModu ? QColor("#ff4444") : QColor("#00ffcc");
+    // İki BAĞIMSIZ eksen: etModu (aksan rengi: turkuaz/kırmızı) ve
+    // karanlikMod (arkaplan/metin karşıtlığı). Açık modda aksan renkleri de
+    // biraz koyulaştırılıyor -- orijinal neon tonlar (#00ffcc/#ff4444) açık/
+    // beyaz zeminde okunaksız kalıyordu.
+    const QString anaArkaplan  = karanlikMod ? "#0b0f19" : "#eef1f6";
+    const QString anaMetin     = etModu
+        ? (karanlikMod ? "#ff4444" : "#b83227")
+        : (karanlikMod ? "#00ffcc" : "#0f8a78");
+    const QString baslikRengi  = etModu
+        ? (karanlikMod ? "#e08a8a" : "#8a5050")
+        : (karanlikMod ? "#6fe0d0" : "#4f7d76");
+    const QString cerceveRengi = karanlikMod ? "#1e3a4a" : "#c3c9d6";
+    const QString panelBg      = karanlikMod ? "rgba(10,14,25,255)"  : "rgba(255,255,255,235)";
+    const QString infoBoxBg    = karanlikMod ? "rgba(15,20,35,220)"  : "rgba(255,255,255,235)";
+    const QString headerBg     = karanlikMod ? "#12182a" : "#dde3ee";
+    const QColor  glowRengi    = QColor(anaMetin);
 
     central->setStyleSheet(QString(
         "QWidget { background-color: %1; color: %2; font-family: 'Consolas'; }"
@@ -357,7 +414,14 @@ void MainWindow::temaUygula(bool etModu)
         "QPushButton { background-color: %4; color: %2; border: 1px solid %2; border-radius: 4px; font-size: 11px; font-weight: bold; }"
         "QPushButton:checked { background-color: %2; color: %1; }"
         "QPushButton:hover { border: 1px solid %3; }"
-        ).arg(anaArkaplan, anaMetin, baslikRengi, infoBoxBg, panelBg, cerceveRengi, headerBg));
+        // Şelale/spektrum ve üst/alt panel bölücüleri (bkz. constructor'daki
+        // QSplitter'lar) -- varsayılan Qt tutamacı çok ince/görünmez, burada
+        // hem görünür yapılıyor hem tema rengini takip ediyor.
+        "QSplitter::handle { background-color: %6; }"
+        "QSplitter::handle:hover { background-color: %2; }"
+        "QSplitter::handle:horizontal { width: 6px; }"
+        "QSplitter::handle:vertical { height: 6px; }"
+        ).arg(anaArkaplan, anaMetin, baslikRengi, infoBoxBg, panelBg, cerceveRengi));
 
     headerBar->setStyleSheet(QString("background-color: %1; border-bottom: 2px solid %2;").arg(headerBg, anaMetin));
     teamLabel->setStyleSheet(QString("color: %1; font-weight: bold; font-size: 15px;").arg(anaMetin));
@@ -822,6 +886,24 @@ QWidget* MainWindow::buildSignalPanel()
         addLogEntry(durduruldu ? "Tarama durduruldu." : "Tarama devam ediyor.");
     });
     bantLayout->addWidget(taramaDurdurButonu);
+
+    // RTL-SDR/libusb bazen (özellikle çok sayıda/güçlü yayın varken) native
+    // seviyede çöküyor -- streamer.py'nin kendi try/except'i bunu YAKALAYAMAZ
+    // (bkz. streamer_watchdog.py'deki açıklama). streamer.py DOĞRUDAN DEĞİL
+    // streamer_watchdog.py ile çalıştırıldıysa, gözcü port 5557'de
+    // "GOZCU,YENIDEN_BASLAT" metnini bekliyor -- gelir gelmez donmuş/çökmüş
+    // olabilecek backend'i öldürüp anında yeniden başlatıyor. streamer.py
+    // doğrudan çalıştırıldıysa (gözcüsüz) bu düğmenin hiçbir etkisi olmaz --
+    // kimse dinlemiyor.
+    QPushButton *gozcuYenidenBaslatButonu = new QPushButton("BACKEND'İ YENİDEN BAŞLAT");
+    gozcuYenidenBaslatButonu->setFixedHeight(24);
+    connect(gozcuYenidenBaslatButonu, &QPushButton::clicked, this, [this]() {
+        if (mZmqPublisher)
+            mZmqPublisher->sendLine("GOZCU,YENIDEN_BASLAT");
+        addLogEntry("Gözcüye zorla yeniden başlatma komutu gönderildi "
+                     "(streamer_watchdog.py ile çalıştırılmıyorsa etkisizdir).");
+    });
+    bantLayout->addWidget(gozcuYenidenBaslatButonu);
 
     layout->addWidget(bantBolumu, 1);
 
